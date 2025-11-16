@@ -32,7 +32,9 @@ The firmware provides:
 🔧 Features
 🌐 Web Interface
 
-Modern HTML UI
+<img width="653" height="504" alt="image" src="https://github.com/user-attachments/assets/d70a9065-7454-462e-b598-597ba94f492d" />
+
+
 
 Buttons for Antenna 1, Antenna 2, All Off
 
