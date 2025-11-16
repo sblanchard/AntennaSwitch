@@ -31,11 +31,9 @@ The firmware provides:
 
 🔧 Features
 🌐 Web Interface
+
+
 <img width="592" height="503" alt="Screenshot 2025-11-16 133157" src="https://github.com/user-attachments/assets/37c74df9-aef8-4fdc-83c1-388c9641c3e6" />
-
-
-
-
 
 Buttons for Antenna 1, Antenna 2, All Off
 
