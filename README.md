@@ -1,5 +1,5 @@
-📡 FlexPilot ESP32 Antenna Switch - Modernize old MFJ rotary switch. 
-One has to butcher out the rotary switch and replace the switching points with the relays.
+📡 FlexPilot ESP32 Antenna Switch - Modernize any antenna switch where you can replace switching with relays
+ 
 
 WiFi + MQTT + Web Dashboard | Compatible With FlexRadio / FlexPilot Automation
 
