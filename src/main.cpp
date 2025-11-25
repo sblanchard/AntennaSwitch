@@ -4,223 +4,233 @@
 #include <PubSubClient.h>
 #include <ESPmDNS.h>
 
-// ---------------------- CONFIG ----------------------
+// ====================== CONFIG ======================
 
+// WiFi
 const char* WIFI_SSID     = "Livebox-C3B0";
 const char* WIFI_PASSWORD = "";
 
+// MQTT
 const char* MQTT_BROKER   = "192.168.1.63";
 const int   MQTT_PORT     = 1883;
 const char* MQTT_CLIENTID = "esp32-antenna-switch";
-const char* MQTT_USER     = "antenna";
-const char* MQTT_PASS     = "!";
+const char* MQTT_USER     = "";
+const char* MQTT_PASSWORD = "";
 
+// MQTT Topics
 const char* MQTT_TOPIC_CMD   = "flexpilot/antennaSwitch/cmd";
 const char* MQTT_TOPIC_STATE = "flexpilot/antennaSwitch/state";
 
-const int RELAY1_PIN = 16;
-const int RELAY2_PIN = 17;
+// ESP32 → ULN2803 → Switch pins
+const int ANT1_PIN = 16;
+const int ANT2_PIN = 17;
+const int ANT3_PIN = 18;
+const int ANT4_PIN = 19;
 
-const bool RELAY_ACTIVE_HIGH = true;
-
-// ----------------------------------------------------
+// ====================== GLOBALS ======================
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 WebServer server(80);
 
-int currentAntenna = 0; // 0=off,1=ant1,2=ant2
+int currentAntenna = 0;  // 0=off, 1..4 = antenna
 
-bool mqttJustConnected = false;
-
-// ---------------------- HTML UI ----------------------
+// ====================== HTML UI ======================
 
 const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8" />
-<title>ESP32 Antenna Switch</title>
+<title>FlexPilot Antenna Switch</title>
 <style>
-body { font-family: Arial; background:#111;color:#eee;text-align:center;padding:20px; }
-button { padding:15px 25px;margin:10px;font-size:18px;border:none;border-radius:8px;cursor:pointer;min-width:180px;}
-.btn1 { background:#1e88e5;color:white;}
-.btn2 { background:#43a047;color:white;}
-.btnOff{background:#e53935;color:white;}
-.active { box-shadow:0 0 12px 2px #ffeb3b; }
+body { font-family: Arial; background:#111; color:#eee; text-align:center; }
+button { padding:16px; margin:10px; font-size:18px; width:220px; }
+.active { box-shadow:0 0 12px yellow; }
 </style>
 <script>
-async function setAntenna(n){
-    await fetch('/set?ant='+n);
-    setTimeout(updateState,200);
+async function setAnt(n){
+  await fetch('/set?ant='+n);
+  setTimeout(update,300);
 }
-async function updateState(){
-    try{
-        const r=await fetch('/state');
-        const j=await r.json();
-        const ant=j.antenna;
+async function update(){
+  const r = await fetch('/state');
+  const j = await r.json();
+  let a = j.antenna;
+  document.getElementById("status").innerText =
+    a==0 ? "OFF" : "Antenna "+a;
 
-        document.getElementById('btn1').classList.toggle('active',ant===1);
-        document.getElementById('btn2').classList.toggle('active',ant===2);
-        document.getElementById('btnOff').classList.toggle('active',ant===0);
-
-        document.getElementById('status').textContent =
-            ant===0 ? "Current antenna: OFF" : "Current antenna: "+ant;
-    }catch(e){}
+  ["1","2","3","4","0"].forEach(id=>{
+    document.getElementById("btn"+id).classList.remove("active");
+  });
+  document.getElementById("btn"+(a||0)).classList.add("active");
 }
-setInterval(updateState,2000);
-window.onload=updateState;
+setInterval(update,2000);
 </script>
 </head>
-<body>
-<h1>ESP32 Antenna Switch</h1>
-<div id="status">Connecting...</div>
-<button id="btn1" class="btn1" onclick="setAntenna(1)">Antenna 1</button><br>
-<button id="btn2" class="btn2" onclick="setAntenna(2)">Antenna 2</button><br>
-<button id="btnOff"class="btnOff"onclick="setAntenna(0)">All OFF</button>
-</body></html>
+<body onload="update()">
+<h1>FlexPilot Antenna Switch</h1>
+<h2 id="status">Loading...</h2>
+
+<button id="btn1" onclick="setAnt(1)">Antenna 1</button><br>
+<button id="btn2" onclick="setAnt(2)">Antenna 2</button><br>
+<button id="btn3" onclick="setAnt(3)">Antenna 3</button><br>
+<button id="btn4" onclick="setAnt(4)">Antenna 4</button><br>
+<button id="btn0" onclick="setAnt(0)">OFF</button>
+
+</body>
+</html>
 )rawliteral";
 
-// ---------------------- RELAYS ----------------------
+// ====================== RELAY CONTROL ======================
 
 void applyRelayState()
 {
-    bool ON  = RELAY_ACTIVE_HIGH ? HIGH : LOW;
-    bool OFF = RELAY_ACTIVE_HIGH ? LOW  : HIGH;
+    // ULN2803 sinks current when HIGH
+    bool ON  = HIGH;
+    bool OFF = LOW;
 
-    if (currentAntenna == 1) {
-        digitalWrite(RELAY1_PIN, ON);
-        digitalWrite(RELAY2_PIN, OFF);
-    }
-    else if (currentAntenna == 2) {
-        digitalWrite(RELAY1_PIN, OFF);
-        digitalWrite(RELAY2_PIN, ON);
-    }
-    else {
-        digitalWrite(RELAY1_PIN, OFF);
-        digitalWrite(RELAY2_PIN, OFF);
+    // clear all outputs
+    digitalWrite(ANT1_PIN, OFF);
+    digitalWrite(ANT2_PIN, OFF);
+    digitalWrite(ANT3_PIN, OFF);
+    digitalWrite(ANT4_PIN, OFF);
+
+    switch (currentAntenna)
+    {
+        case 1: digitalWrite(ANT1_PIN, ON); break;
+        case 2: digitalWrite(ANT2_PIN, ON); break;
+        case 3: digitalWrite(ANT3_PIN, ON); break;
+        case 4: digitalWrite(ANT4_PIN, ON); break;
+        default: break;
     }
 
-    Serial.printf("Relay state → %d\n", currentAntenna);
+    Serial.print("Selected antenna: ");
+    Serial.println(currentAntenna);
 }
 
-void setAntenna(int a)
+void setAntenna(int ant)
 {
-    if (a < 0 || a > 2) a = 0;
-    currentAntenna = a;
+    if (ant < 0 || ant > 4) ant = 0;
+    currentAntenna = ant;
     applyRelayState();
 
-    // Publish NEW state only
-    if (mqttClient.connected()) {
-        mqttClient.publish(MQTT_TOPIC_STATE,
-                           (a==0 ? "off" : String(a).c_str()),
-                           true);
+    if (strlen(MQTT_BROKER) > 0)
+    {
+        String payload = currentAntenna == 0 ? "off" : String(currentAntenna);
+        mqttClient.publish(MQTT_TOPIC_STATE, payload.c_str(), true);
     }
 }
 
-// ---------------------- HTTP ------------------------
+// ====================== HTTP ======================
 
-void handleRoot(){ server.send_P(200,"text/html",INDEX_HTML); }
-
-void handleSet()
-{
-    int a = server.arg("ant").toInt();
-    setAntenna(a);
-    server.send(200,"application/json", "{\"ok\":true}");
+void handleRoot() {
+  server.send_P(200, "text/html", INDEX_HTML);
 }
 
-void handleState()
-{
-    char buf[32];
-    sprintf(buf,"{\"antenna\":%d}",currentAntenna);
-    server.send(200,"application/json",buf);
+void handleSet() {
+  if (!server.hasArg("ant")) {
+    server.send(400, "text/plain", "missing ant");
+    return;
+  }
+  int ant = server.arg("ant").toInt();
+  setAntenna(ant);
+  server.send(200, "text/plain", "ok");
 }
 
-void setupHttp(){
-    server.on("/",handleRoot);
-    server.on("/set",handleSet);
-    server.on("/state",handleState);
-    server.begin();
+void handleState() {
+  server.send(200, "application/json",
+    String("{\"antenna\":") + currentAntenna + "}");
 }
 
-// ---------------------- MQTT ------------------------
+// ====================== MQTT ======================
 
-void mqttCallback(char* topic, byte* payload, unsigned int len)
+void mqttCallback(char* topic, byte* payload, unsigned int length)
 {
-    if (mqttJustConnected) {
-        // Ignore first retained message
-        mqttJustConnected = false;
-        return;
-    }
+  String msg;
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
 
-    String msg;
-    for (uint i = 0; i < len; i++) msg += (char)payload[i];
+  if (String(topic) == MQTT_TOPIC_CMD)
+  {
     msg.trim();
-
-    if (String(topic) == MQTT_TOPIC_CMD) {
-        if (msg == "1") setAntenna(1);
-        else if (msg == "2") setAntenna(2);
-        else if (msg == "off" || msg == "0") setAntenna(0);
-    }
+    if      (msg == "1") setAntenna(1);
+    else if (msg == "2") setAntenna(2);
+    else if (msg == "3") setAntenna(3);
+    else if (msg == "4") setAntenna(4);
+    else if (msg == "0" || msg == "off") setAntenna(0);
+  }
 }
 
 void reconnectMqtt()
 {
-    if (mqttClient.connected()) return;
+  if (mqttClient.connected()) return;
 
-    Serial.print("MQTT connecting...");
-    if (mqttClient.connect(MQTT_CLIENTID, MQTT_USER, MQTT_PASS)) {
-        Serial.println("OK");
-        mqttJustConnected = true;  
-        mqttClient.subscribe(MQTT_TOPIC_CMD);
-    } else {
-        Serial.println("FAILED");
-    }
+  String cid = MQTT_CLIENTID;
+  cid += "-";
+  cid += String((uint32_t)ESP.getEfuseMac(), HEX);
+
+  if (mqttClient.connect(cid.c_str()))
+  {
+    mqttClient.subscribe(MQTT_TOPIC_CMD);
+    mqttClient.publish(MQTT_TOPIC_STATE,
+      currentAntenna == 0 ? "off" : String(currentAntenna).c_str(), true);
+  }
 }
 
-// ---------------------- WiFi ------------------------
+// ====================== WIFI ======================
 
 void connectWiFi()
 {
-    WiFi.mode(WIFI_STA);
-    WiFi.setHostname("flexpilot-switch");
-    WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.setHostname("flexpilot-switch");
 
-    int t=0;
-    while (WiFi.status() != WL_CONNECTED && t<40) {
-        delay(200);
-        t++;
-    }
+  if (MDNS.begin("flexpilot-switch"))
+    MDNS.addService("http", "tcp", 80);
 
-    Serial.println(WiFi.localIP());
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(300);
+    Serial.print(".");
+  }
 
-    MDNS.begin("flexpilot-switch");
-    MDNS.addService("http","tcp",80);
+  Serial.println();
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
 }
 
-// ---------------------- SETUP & LOOP ------------------------
+// ====================== SETUP / LOOP ======================
 
 void setup()
 {
-    Serial.begin(115200);
+  Serial.begin(115200);
 
-    pinMode(RELAY1_PIN, OUTPUT);
-    pinMode(RELAY2_PIN, OUTPUT);
+  pinMode(ANT1_PIN, OUTPUT);
+  pinMode(ANT2_PIN, OUTPUT);
+  pinMode(ANT3_PIN, OUTPUT);
+  pinMode(ANT4_PIN, OUTPUT);
 
-    // Initial safe state (only at boot)
-    applyRelayState();
+  setAntenna(0);
 
-    connectWiFi();
-    setupHttp();
+  connectWiFi();
+  server.on("/", handleRoot);
+  server.on("/set", handleSet);
+  server.on("/state", handleState);
+  server.begin();
 
+  if (strlen(MQTT_BROKER) > 0)
+  {
     mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
     mqttClient.setCallback(mqttCallback);
+  }
 }
 
 void loop()
 {
-    server.handleClient();
+  server.handleClient();
 
+  if (strlen(MQTT_BROKER) > 0)
+  {
     if (!mqttClient.connected()) reconnectMqtt();
-    else mqttClient.loop();
+    mqttClient.loop();
+  }
 }
