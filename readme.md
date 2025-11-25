@@ -1,4 +1,6 @@
-📡 FlexPilot ESP32 Antenna Switch
+📡 FlexPilot ESP32 Antenna Switch - Modernize any antenna switch where you can replace switching with relays
+ 
+
 WiFi + MQTT + Web Dashboard | Compatible With FlexRadio / FlexPilot Automation
 
 This project implements a network-controlled antenna switch using an ESP32, ULN2803A transistor driver, and SIP reed relays.
@@ -6,12 +8,8 @@ This project implements a network-controlled antenna switch using an ESP32, ULN2
 It integrates perfectly with:
 
 FlexPilot
-
-Log4OM (CAT via Hamlib in your app)
-
 Node-RED
-
-Home Assistant
+Home Assistant 
 
 Any MQTT automation system
 
@@ -30,9 +28,11 @@ The firmware provides:
 ✔ Designed for silent low-RF-loss switching
 
 🔧 Features
+
 🌐 Web Interface
 
-Modern HTML UI
+
+<img width="592" height="503" alt="Screenshot 2025-11-16 133157" src="https://github.com/user-attachments/assets/37c74df9-aef8-4fdc-83c1-388c9641c3e6" />
 
 Buttons for Antenna 1, Antenna 2, All Off
 
