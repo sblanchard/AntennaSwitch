@@ -7,13 +7,13 @@
 // ---------------------- CONFIG ----------------------
 
 const char* WIFI_SSID     = "Livebox-C3B0";
-const char* WIFI_PASSWORD = "TivT2aWNK4pjmusCQj";
+const char* WIFI_PASSWORD = "";
 
 const char* MQTT_BROKER   = "192.168.1.63";
 const int   MQTT_PORT     = 1883;
 const char* MQTT_CLIENTID = "esp32-antenna-switch";
 const char* MQTT_USER     = "antenna";
-const char* MQTT_PASS     = "Zonker13!";
+const char* MQTT_PASS     = "!";
 
 const char* MQTT_TOPIC_CMD   = "flexpilot/antennaSwitch/cmd";
 const char* MQTT_TOPIC_STATE = "flexpilot/antennaSwitch/state";
