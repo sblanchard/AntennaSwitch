@@ -1,13 +1,13 @@
-📡 FlexPilot ESP32 Antenna Switch - Modernize any antenna switch where you can replace switching with relays
+📡 StationPilot ESP32 Antenna Switch - Modernize any antenna switch where you can replace switching with relays
  
 
-WiFi + MQTT + Web Dashboard | Compatible With FlexRadio / FlexPilot Automation
+WiFi + MQTT + Web Dashboard | Compatible With StationPilot Automation
 
 This project implements a network-controlled antenna switch using an ESP32, ULN2803A transistor driver, and SIP reed relays.
 
 It integrates perfectly with:
 
-FlexPilot
+StationPilot
 Node-RED
 Home Assistant 
 
@@ -48,9 +48,9 @@ Retained state messages
 
 Topics:
 
-flexpilot/antennaSwitch/cmd
+stationpilot/antennaSwitch/cmd
 
-flexpilot/antennaSwitch/state
+stationpilot/antennaSwitch/state
 
 🧠 Safe Behavior
 
@@ -71,7 +71,7 @@ Designed for external RF relay board switching
 
 Access via:
 
-http://flexpilot-switch.local
+http://StationPilot-switch.local
 
 🖼️ Screenshot (placeholder)
 
@@ -135,7 +135,7 @@ Upload src/main.cpp
 
 🧪 MQTT Command Reference
 Command Topic
-flexpilot/antennaSwitch/cmd
+stationpilot/antennaSwitch/cmd
 
 Commands
 Payload	Action
@@ -144,7 +144,7 @@ Payload	Action
 0	All off
 off	All off
 State Topic
-flexpilot/antennaSwitch/state
+stationpilot/antennaSwitch/state
 
 
 Payload is:
@@ -174,7 +174,7 @@ Returns JSON:
 
 The device is reachable at:
 
-http://flexpilot-switch.local
+http://antenna-switch.local
 
 📂 Structure
 /src/main.cpp
@@ -195,7 +195,7 @@ Integration with SWR sensors
 
 Home Assistant auto-discovery
 
-FlexPilot-native panel
+StationPilot-native panel
 
 Rule engine:
 

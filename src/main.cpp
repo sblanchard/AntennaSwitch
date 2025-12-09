@@ -5,13 +5,19 @@
 #include <ESPmDNS.h>
 #include <Update.h>
 #include <Preferences.h>
+#include <ESP32Ping.h>
 
 // --------------------------------------------------
-// WiFi CONFIG
+// WiFi CONFIG (defaults – can be changed in /settings)
 // --------------------------------------------------
-const char* WIFI_SSID     = "Livebox-C3B0";
-const char* WIFI_PASSWORD = "";
-const char* HOSTNAME      = "flexpilot-switch";
+const char* HOSTNAME = "antenna-switch";
+
+struct WiFiSettings
+{
+    String ssid;
+    String password;
+    IPAddress gatewayIP;
+} wifiCfg;
 
 // --------------------------------------------------
 // MQTT CONFIG (defaults – can be changed in /settings)
@@ -47,6 +53,12 @@ WebServer server(80);
 
 int currentAntenna = 0;   // 0 = off, 1..4 = antenna
 
+// WiFi watchdog
+const unsigned long WIFI_CHECK_INTERVAL = 30000;   // Check every 30 seconds
+const int WIFI_MAX_RECONNECT_ATTEMPTS = 10;        // Reboot after this many failures
+unsigned long lastWifiCheck = 0;
+int wifiReconnectAttempts = 0;
+
 // --------------------------------------------------
 // MAIN UI (waterfall-style buttons, very clear state)
 // --------------------------------------------------
@@ -54,7 +66,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
-<title>FlexPilot Antenna Switch</title>
+<title>StationPilot Antenna Switch</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 body {
@@ -151,7 +163,7 @@ setInterval(update, 1500);
 </head>
 <body onload="update()">
 
-<h1>FlexPilot Antenna Switch</h1>
+<h1>StationPilot Antenna Switch</h1>
 <div id="status" class="status">Loading...</div>
 
 <div>
@@ -163,12 +175,12 @@ setInterval(update, 1500);
 </div>
 
 <div class="linkrow">
-  <a href="/settings">MQTT Settings</a> |
+  <a href="/settings">Settings</a> |
   <a href="/update">Firmware Update</a>
 </div>
 
 <div class="footer">
-  FlexPilot ESP32 Antenna Controller<br/>
+  StationPilot ESP32 Antenna Controller<br/>
   Host: <span id="host">%HOST%</span>
 </div>
 
@@ -210,6 +222,11 @@ void setAntenna(int ant)
     if (ant < 0 || ant > 4) ant = 0;
     currentAntenna = ant;
     applyRelayState();
+
+    // Persist selection to NVS
+    prefs.begin("antSwitch", false);
+    prefs.putInt("lastAntenna", currentAntenna);
+    prefs.end();
 
     if (mqttCfg.enabled && mqttCfg.broker.length() > 0) {
         String payload = (ant == 0) ? "off" : String(ant);
@@ -254,16 +271,26 @@ void handleState()
 void loadSettings()
 {
     prefs.begin("antSwitch", true); // read-only
+
+    // WiFi settings
+    wifiCfg.ssid     = prefs.getString("wifiSSID",    "Livebox-C3B0");
+    wifiCfg.password = prefs.getString("wifiPass",    "");
+    uint32_t gwIP    = prefs.getUInt("gatewayIP",     IPAddress(192, 168, 1, 1));
+    wifiCfg.gatewayIP = IPAddress(gwIP);
+
+    // MQTT settings
     mqttCfg.enabled    = prefs.getBool("mqttEnabled", true);
     mqttCfg.broker     = prefs.getString("mqttBroker",  "192.168.1.63");
     mqttCfg.port       = prefs.getUShort("mqttPort",    1883);
     mqttCfg.user       = prefs.getString("mqttUser",    "");
     mqttCfg.password   = prefs.getString("mqttPass",    "");
-    mqttCfg.topicCmd   = prefs.getString("mqttCmd",     "flexpilot/antennaSwitch/cmd");
-    mqttCfg.topicState = prefs.getString("mqttState",   "flexpilot/antennaSwitch/state");
+    mqttCfg.topicCmd   = prefs.getString("mqttCmd",     "stationpilot/antennaSwitch/cmd");
+    mqttCfg.topicState = prefs.getString("mqttState",   "stationpilot/antennaSwitch/state");
     prefs.end();
 
     Serial.println("Loaded settings:");
+    Serial.printf(" WiFi SSID: %s\n", wifiCfg.ssid.c_str());
+    Serial.printf(" Gateway IP: %s\n", wifiCfg.gatewayIP.toString().c_str());
     Serial.printf(" MQTT enabled: %s\n", mqttCfg.enabled ? "yes" : "no");
     Serial.printf(" Broker: %s:%u\n", mqttCfg.broker.c_str(), mqttCfg.port);
     Serial.printf(" Cmd topic: %s\n", mqttCfg.topicCmd.c_str());
@@ -273,6 +300,13 @@ void loadSettings()
 void saveSettings()
 {
     prefs.begin("antSwitch", false);
+
+    // WiFi settings
+    prefs.putString("wifiSSID", wifiCfg.ssid);
+    prefs.putString("wifiPass", wifiCfg.password);
+    prefs.putUInt("gatewayIP", (uint32_t)wifiCfg.gatewayIP);
+
+    // MQTT settings
     prefs.putBool("mqttEnabled", mqttCfg.enabled);
     prefs.putString("mqttBroker", mqttCfg.broker);
     prefs.putUShort("mqttPort", mqttCfg.port);
@@ -286,19 +320,42 @@ void saveSettings()
 void handleSettingsGet()
 {
     String html;
-    html.reserve(4000);
+    html.reserve(5000);
 
     html += F(
-"<!DOCTYPE html><html><head><title>MQTT Settings</title>"
+"<!DOCTYPE html><html><head><title>Settings</title>"
 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
 "<style>body{font-family:Arial;background:#111;color:#eee;padding:20px}"
 "label{display:block;margin-top:10px}"
 "input[type=text],input[type=number],input[type=password]{width:100%;padding:6px;margin-top:4px;border-radius:4px;border:1px solid #555;background:#222;color:#eee}"
-".box{background:#222;padding:15px;border-radius:10px;max-width:480px;margin:0 auto}"
+".box{background:#222;padding:15px;border-radius:10px;max-width:480px;margin:10px auto}"
+"h3{margin-top:0;color:#64b5f6;border-bottom:1px solid #444;padding-bottom:8px}"
 "button{margin-top:15px;padding:10px 18px;border:none;border-radius:6px;font-size:16px;cursor:pointer;background:#1e88e5;color:white}"
-"a{color:#64b5f6}</style></head><body><h2>MQTT Settings</h2><div class='box'>");
+".warn{background:#332200;border:1px solid #664400;padding:8px;border-radius:4px;margin-top:10px;font-size:12px}"
+"a{color:#64b5f6}</style></head><body><h2>Settings</h2>");
 
     html += F("<form method='POST' action='/settings'>");
+
+    // WiFi Settings Section
+    html += F("<div class='box'><h3>WiFi Settings</h3>");
+
+    html += F("<label>SSID</label><input type='text' name='wifiSSID' value='");
+    html += wifiCfg.ssid;
+    html += F("'>");
+
+    html += F("<label>Password</label><input type='password' name='wifiPass' value='");
+    html += wifiCfg.password;
+    html += F("'>");
+
+    html += F("<label>Gateway IP (for ping check)</label><input type='text' name='gatewayIP' value='");
+    html += wifiCfg.gatewayIP.toString();
+    html += F("'>");
+
+    html += F("<div class='warn'>Changing WiFi settings requires a reboot to take effect.</div>");
+    html += F("</div>");
+
+    // MQTT Settings Section
+    html += F("<div class='box'><h3>MQTT Settings</h3>");
 
     html += F("<label><input type='checkbox' name='mqttEnabled' ");
     if (mqttCfg.enabled) html += F("checked");
@@ -328,8 +385,10 @@ void handleSettingsGet()
     html += mqttCfg.topicState;
     html += F("'>");
 
-    html += F("<button type='submit'>Save</button>");
-    html += F("</form></div><p><a href='/'>Back to switch</a></p></body></html>");
+    html += F("</div>");
+
+    html += F("<div style='text-align:center'><button type='submit'>Save Settings</button></div>");
+    html += F("</form><p style='text-align:center'><a href='/'>Back to switch</a></p></body></html>");
 
     server.send(200, "text/html", html);
 }
@@ -346,6 +405,27 @@ void applyMqttConfig()
 
 void handleSettingsPost()
 {
+    bool wifiChanged = false;
+
+    // WiFi settings
+    if (server.hasArg("wifiSSID")) {
+        String newSSID = server.arg("wifiSSID");
+        if (newSSID != wifiCfg.ssid) wifiChanged = true;
+        wifiCfg.ssid = newSSID;
+    }
+    if (server.hasArg("wifiPass")) {
+        String newPass = server.arg("wifiPass");
+        if (newPass != wifiCfg.password) wifiChanged = true;
+        wifiCfg.password = newPass;
+    }
+    if (server.hasArg("gatewayIP")) {
+        IPAddress newGW;
+        if (newGW.fromString(server.arg("gatewayIP"))) {
+            wifiCfg.gatewayIP = newGW;
+        }
+    }
+
+    // MQTT settings
     mqttCfg.enabled = server.hasArg("mqttEnabled");
     if (server.hasArg("mqttBroker")) mqttCfg.broker = server.arg("mqttBroker");
     if (server.hasArg("mqttPort"))   mqttCfg.port   = server.arg("mqttPort").toInt();
@@ -357,8 +437,17 @@ void handleSettingsPost()
     saveSettings();
     applyMqttConfig();
 
-    server.sendHeader("Location", "/settings");
-    server.send(303); // redirect
+    if (wifiChanged) {
+        server.send(200, "text/html",
+            "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<style>body{font-family:Arial;background:#111;color:#eee;padding:40px;text-align:center}</style></head>"
+            "<body><h2>Settings Saved</h2><p>WiFi settings changed. Rebooting in 3 seconds...</p></body></html>");
+        delay(3000);
+        ESP.restart();
+    } else {
+        server.sendHeader("Location", "/settings");
+        server.send(303);
+    }
 }
 
 // --------------------------------------------------
@@ -497,11 +586,11 @@ void setupHttpServer()
 // --------------------------------------------------
 void connectWiFi()
 {
-    Serial.printf("Connecting to WiFi: %s\n", WIFI_SSID);
+    Serial.printf("Connecting to WiFi: %s\n", wifiCfg.ssid.c_str());
 
     WiFi.mode(WIFI_STA);
     WiFi.setHostname(HOSTNAME);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    WiFi.begin(wifiCfg.ssid.c_str(), wifiCfg.password.c_str());
 
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 60) {
@@ -515,6 +604,7 @@ void connectWiFi()
         Serial.println("WiFi connected.");
         Serial.print("IP: ");
         Serial.println(WiFi.localIP());
+        wifiReconnectAttempts = 0;  // Reset counter on successful connection
     } else {
         Serial.println("WiFi connection failed, continuing anyway.");
     }
@@ -525,6 +615,71 @@ void connectWiFi()
     }
 }
 
+void checkWiFiConnection()
+{
+    unsigned long now = millis();
+
+    // Only check periodically
+    if (now - lastWifiCheck < WIFI_CHECK_INTERVAL) {
+        return;
+    }
+    lastWifiCheck = now;
+
+    // Check WiFi status AND ping gateway to verify real connectivity
+    bool connected = (WiFi.status() == WL_CONNECTED);
+    if (connected) {
+        Serial.print("Pinging gateway... ");
+        connected = Ping.ping(wifiCfg.gatewayIP, 2);  // 2 attempts
+        Serial.println(connected ? "OK" : "FAILED");
+    }
+
+    if (connected) {
+        wifiReconnectAttempts = 0;  // Reset counter when connected
+        return;
+    }
+
+    // WiFi disconnected - attempt reconnect
+    wifiReconnectAttempts++;
+    Serial.printf("WiFi disconnected. Reconnect attempt %d/%d\n",
+                  wifiReconnectAttempts, WIFI_MAX_RECONNECT_ATTEMPTS);
+
+    if (wifiReconnectAttempts >= WIFI_MAX_RECONNECT_ATTEMPTS) {
+        Serial.println("Max reconnect attempts reached. Rebooting...");
+        delay(1000);
+        ESP.restart();
+    }
+
+    // Attempt reconnection
+    WiFi.disconnect();
+    delay(100);
+    WiFi.begin(wifiCfg.ssid.c_str(), wifiCfg.password.c_str());
+
+    // Wait up to 10 seconds for connection
+    int retries = 0;
+    while (WiFi.status() != WL_CONNECTED && retries < 40) {
+        delay(250);
+        Serial.print(".");
+        retries++;
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("WiFi reconnected.");
+        Serial.print("IP: ");
+        Serial.println(WiFi.localIP());
+        wifiReconnectAttempts = 0;
+
+        // Restart mDNS after reconnection
+        MDNS.end();
+        if (MDNS.begin(HOSTNAME)) {
+            MDNS.addService("http", "tcp", 80);
+            Serial.printf("mDNS restarted: http://%s.local\n", HOSTNAME);
+        }
+    } else {
+        Serial.println("WiFi reconnect failed.");
+    }
+}
+
 // --------------------------------------------------
 // SETUP & LOOP
 // --------------------------------------------------
@@ -532,16 +687,22 @@ void setup()
 {
     Serial.begin(115200);
     delay(300);
-    Serial.println("\n=== FlexPilot ESP32 Antenna Switch ===");
+    Serial.println("\n=== StationPilot ESP32 Antenna Switch ===");
 
     pinMode(ANT1_PIN, OUTPUT);
     pinMode(ANT2_PIN, OUTPUT);
     pinMode(ANT3_PIN, OUTPUT);
     pinMode(ANT4_PIN, OUTPUT);
 
-    setAntenna(0);   // all off at boot
-
     loadSettings();
+
+    // Restore last antenna position from NVS
+    prefs.begin("antSwitch", true);
+    int lastAnt = prefs.getInt("lastAntenna", 0);
+    prefs.end();
+    currentAntenna = lastAnt;
+    applyRelayState();
+    Serial.printf("Restored antenna position: %d\n", currentAntenna);
     connectWiFi();
     applyMqttConfig();
     setupHttpServer();
@@ -550,6 +711,14 @@ void setup()
 void loop()
 {
     server.handleClient();
+
+    // Periodic WiFi check - reconnect or reboot if needed
+    checkWiFiConnection();
+
+    // Skip MQTT handling if WiFi is disconnected
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
 
     if (mqttCfg.enabled && mqttCfg.broker.length() > 0) {
         if (!mqttClient.connected()) {
